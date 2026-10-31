@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ClipType</title>
+  <link rel="stylesheet" href="popup.css">
+  <script src="core.js" defer></script>
+  <script src="popup.js" defer></script>
+</head>
+<body>
+  <header><img src="icons/32.png" width="32" height="32" alt=""><div><h1>ClipType</h1><p>剪贴板 → 光标处</p></div><kbd>Alt ⇧ V</kbd></header>
+  <section class="target"><span class="dot" aria-hidden="true"></span><p id="target" role="status">正在查找输入位置…</p></section>
+  <div class="row"><label for="text">要输入的文字</label><button id="read" class="link" type="button">读取剪贴板</button></div>
+  <textarea id="text" maxlength="100000" placeholder="读取剪贴板，或在这里粘贴、编辑文字。" spellcheck="false"></textarea>
+  <p class="meta"><span id="count">0 个字符</span><span>文字不会保存</span></p>
+  <section class="settings">
+    <label for="interval">逐字间隔 <span><input id="interval" type="number" min="0" max="500" step="5" value="30"> ms</span></label>
+    <label for="delay">开始前等待 <span><input id="delay" type="number" min="300" max="5000" step="100" value="500"> ms</span></label>
+    <label for="newlines">文本换行 <select id="newlines"><option value="preserve">保留换行</option><option value="space">替换为空格</option></select></label>
+  </section>
+  <div class="actions"><button id="simulate" class="primary" disabled>逐字输入</button><button id="insert" disabled>普通插入</button></div>
+  <p id="status" role="status" aria-live="polite">先在网页输入框里放好光标，再打开扩展。</p>
+  <footer>输入中按 Esc 停止 · 切换页面自动停止<br>网页不接受扩展输入时，可使用 Windows 桌面版。</footer>
+</body>
+</html>

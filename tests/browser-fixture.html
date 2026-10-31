@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>ClipType 浏览器本地测试</title>
+<style>
+body { max-width: 780px; margin: 60px auto; padding: 24px; color: #1e283a; background: #f5f7fb; font: 17px/1.7 system-ui; }
+textarea, [contenteditable] { display: block; box-sizing: border-box; width: 100%; min-height: 140px; background: white; border: 1px solid #b8c4d6; padding: 16px; font: inherit; }
+output { color: #315bd0; }
+</style>
+<h1>ClipType 浏览器本地测试</h1>
+<p>仅用于本机验证，无网络请求。点击输入框后按 Ctrl + Alt + V。</p>
+<label for="plain">普通文本框</label><textarea id="plain" spellcheck="false"></textarea>
+<p><label for="rich">网页富文本框</label></p><div id="rich" contenteditable="true" role="textbox" aria-label="网页富文本框"></div>
+<p><output id="events">input: 0 · paste: 0</output></p>
+<script>
+let inputs = 0, pastes = 0;
+const summary = document.getElementById('events');
+for (const el of [document.getElementById('plain'), document.getElementById('rich')]) {
+  el.addEventListener('input', () => { inputs++; summary.textContent = `input: ${inputs} · paste: ${pastes}`; });
+  el.addEventListener('paste', () => { pastes++; summary.textContent = `input: ${inputs} · paste: ${pastes}`; });
+}
+</script>
+</html>

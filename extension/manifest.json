@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "ClipType · 剪贴板逐字输入",
+  "version": "1.0.0",
+  "minimum_chrome_version": "109",
+  "description": "把剪贴板文字逐字输入到当前网页光标处，支持普通插入、速度调整和随时停止。",
+  "permissions": ["activeTab", "scripting", "storage", "clipboardRead"],
+  "background": {"service_worker": "background.js"},
+  "action": {
+    "default_title": "ClipType · 选择输入方式",
+    "default_popup": "popup.html",
+    "default_icon": {"16": "icons/16.png", "32": "icons/32.png", "128": "icons/128.png"}
+  },
+  "icons": {"16": "icons/16.png", "32": "icons/32.png", "128": "icons/128.png"},
+  "commands": {
+    "_execute_action": {"suggested_key": "Alt+Shift+V"}
+  }
+}

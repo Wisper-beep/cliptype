@@ -1,0 +1,38 @@
+# ClipType · 剪贴板模拟输入
+
+Windows 桌面小工具。在浏览器网页、聊天软件、编辑器里，可以把剪贴板文字逐字模拟输入，也可以选择普通粘贴。
+
+## 使用
+
+1. 解压 Windows 下载包，双击 `ClipType.exe`。从源码构建时，程序位于 `dist\ClipType.exe`。无需安装；首次打开会显示设置窗口。
+2. 复制要输入的文字，在目标程序的输入框里点击，放好光标或选中要替换的文字。
+3. 按 **Ctrl + Alt + V**，检查预览和目标窗口，选择 **模拟输入**（默认，可按 Enter）或 **普通粘贴**。
+4. 松开按键，等待默认的 800 毫秒后开始输入。输入中按 **Esc** 可停止。切换窗口、改变原生控件焦点或检测到鼠标按下时也会停止。
+
+可先在设置窗口下方的「本地试输入」框里测试。选择面板按 Esc 取消，不输入任何文字。关闭设置窗口会收起到托盘；右键托盘图标可退出。
+
+## 设置
+
+- 快捷键可选 Ctrl + Alt + V、Ctrl + Alt + P、Ctrl + Shift + F8；冲突时会提示。
+- 逐字间隔：0–500 ms，默认 30 ms。慢速输入框可调到 60–100 ms。
+- 开始前等待：300–5000 ms，留出松开按键的时间。
+- 换行：默认模拟 Shift + Enter，适合很多聊天输入框；编辑器可选 Enter，单行输入可选替换为空格。**聊天软件中 Enter 可能发送消息，先用短文本确认目标程序的行为。**
+- Tab 固定转换为 4 个空格，其他控制字符会移除；CRLF、CR、LF 和 Unicode 行分隔符统一处理。中文、英文、常用表情可直接模拟输入。
+- 单次最多 100,000 个 UTF-16 字符。模拟输入不包含复制文字的字体、图片或其他富文本格式；普通粘贴使用目标程序的 Ctrl + V 行为。
+
+## 兼容与边界
+
+- 面向 Windows 10 / 11，依赖系统自带的 .NET Framework 4.5 或更新版本，无第三方依赖。
+- 使用 Windows `SendInput` 和 Unicode 按键事件，不生成输入法拼音过程，也不伪装成物理键盘。部分游戏、远程会话或特殊网页可能不接受。
+- 普通权限程序不能向更高权限的程序注入输入；目标程序若以管理员身份运行，请手动以相同权限启动本工具。[微软 SendInput 文档](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)
+- 自动停止是按字符检查的，不能撤回已经发出的按键。输入过程中请保持原光标位置；同一网页控件里的光标移动不一定能由窗口焦点检测发现。
+- 不监控或保存剪贴板历史、不联网。仅在按下快捷键时读取文字。设置保存在 `%LOCALAPPDATA%\ClipType\settings.xml`，不保存剪贴板内容。
+- 选择面板展示调用快捷键时的文字快照。普通粘贴前若发现剪贴板已改变，会取消此次操作；模拟输入使用原快照。
+
+## 开发
+
+在项目目录执行 `powershell -ExecutionPolicy Bypass -File .\build.ps1 -Test`，生成程序并运行测试。只使用 Windows 自带的 .NET Framework C# 编译器，不需要下载 NuGet 包。
+
+`dist\ClipType.Tests.exe --integration` 会在独立测试窗口中验证真实按键输入（请在可交互桌面运行，测试期间不要切换窗口）。`dist\ClipType.Tests.exe --ui-smoke` 检查主窗口和选择窗口的构造及释放。`tests\browser-fixture.html` 是无网络请求的浏览器测试页，可手动打开检查 textarea、contenteditable 及 input/paste 事件。
+
+源码在 `src`；`Native.cs` 封装 Win32，`Core.cs` 处理输入计划、设置和取消，`MainForm.cs` 管理托盘及快捷键，`ChoiceForm.cs` 提供选择面板。
