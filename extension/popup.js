@@ -1,9 +1,23 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const core = globalThis.ClipTypeCore;
+const api = globalThis.browser || globalThis.chrome;
 let tabId;
 let target;
 let working = false;
+let saveTimer;
+function optionsFromForm() {
+  return core.settings({interval:$("interval").value,delay:$("delay").value,newlines:$("newlines").value,
+    randomize:$("randomize").checked,variation:$("variation").value,punctuation:$("punctuation").value,
+    sentence:$("sentence").value,paragraph:$("paragraph").value,quickButton:$("quickButton").checked});
+}
+async function saveOptions() {
+  const options = optionsFromForm();
+  try {
+    await api.storage.local.set({settings:options});
+    if (tabId) await api.tabs.sendMessage(tabId, {channel:"cliptype",action:"quick",enabled:options.quickButton}).catch(() => {});
+  } catch { status("无法保存设置；本次仍可使用。", true); }
+}
 function status(text, error = false) { $("status").textContent = text; $("status").classList.toggle("error", error); }
 function update() {
   $("count").textContent = core.graphemes($("text").value).length.toLocaleString() + " 个字符";
@@ -22,26 +36,30 @@ async function start(mode) {
   if (working || !target || !$("text").value.length) return;
   working = true; update();
   try {
-    const options = core.settings({interval: $("interval").value, delay: $("delay").value, newlines: $("newlines").value});
-    await chrome.storage.local.set({settings: options});
-    const result = await chrome.tabs.sendMessage(tabId, {channel: "cliptype", action: "start", id: target.id, text: $("text").value, options, mode});
+    const options = optionsFromForm();
+    clearTimeout(saveTimer);
+    await api.storage.local.set({settings: options});
+    const result = await api.tabs.sendMessage(tabId, {channel: "cliptype", action: "start", id: target.id, text: $("text").value, options, mode});
     if (!result?.ok) throw new Error(result?.error || "无法启动输入，请重新打开扩展。");
     window.close();
   } catch (error) { status(error.message, true); working = false; update(); }
 }
 async function initialize() {
   try {
-    const stored = await chrome.storage.local.get("settings");
+    const stored = await api.storage.local.get("settings");
     const options = core.settings(stored.settings);
     $("interval").value = options.interval; $("delay").value = options.delay; $("newlines").value = options.newlines;
-    const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+    for (const key of ["variation","punctuation","sentence","paragraph"]) $(key).value = options[key];
+    $("randomize").checked = options.randomize; $("quickButton").checked = options.quickButton;
+    const [tab] = await api.tabs.query({active: true, currentWindow: true});
     if (!tab?.id) throw new Error("找不到当前网页。");
     tabId = tab.id;
-    await chrome.scripting.executeScript({target: {tabId}, files: ["core.js", "content.js"]});
-    const result = await chrome.tabs.sendMessage(tabId, {channel: "cliptype", action: "capture"});
+    await api.scripting.executeScript({target: {tabId}, files: ["core.js", "content.js"]});
+    const result = await api.tabs.sendMessage(tabId, {channel: "cliptype", action: "capture"});
     if (!result?.ok) throw new Error(result?.error || "找不到原输入位置。");
     target = result;
     $("target").textContent = "输入位置：" + target.label + (target.singleLine ? " · 单行" : "");
+    await api.tabs.sendMessage(tabId, {channel:"cliptype",action:"quick",enabled:options.quickButton});
   } catch (error) {
     $("target").textContent = /Cannot access|Missing host|not allowed|extensions gallery/i.test(error.message)
       ? "这个页面不支持扩展输入。请在普通网页使用；本地文件需要开启文件网址访问。"
@@ -55,4 +73,11 @@ $("text").addEventListener("input", update);
 $("read").addEventListener("click", readClipboard);
 $("simulate").addEventListener("click", () => start("simulate"));
 $("insert").addEventListener("click", () => start("insert"));
+for (const id of ["interval","delay","newlines","randomize","variation","punctuation","sentence","paragraph","quickButton"])
+  $(id).addEventListener("change", saveOptions);
+$("preset").addEventListener("change", () => {
+  const presets = {slow:100,normal:30,fast:5};
+  if ($( "preset").value in presets) $("interval").value = presets[$("preset").value];
+  saveOptions();
+});
 initialize();

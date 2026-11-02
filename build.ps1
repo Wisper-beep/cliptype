@@ -15,6 +15,8 @@ if ($Test) {
     $testSources = @($sources) + @((Join-Path $projectRoot 'tests\Tests.cs'))
     & $compiler /nologo /utf8output /codepage:65001 /target:exe /main:Tests "/out:$output\ClipType.Tests.exe" @references @testSources
     if ($LASTEXITCODE -ne 0) { throw 'Test compilation failed.' }
+    & $compiler /nologo /utf8output /codepage:65001 /target:winexe "/out:$output\ClipType.Target.exe" @references (Join-Path $projectRoot 'tests\TargetFixture.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Fixture compilation failed.' }
     & (Join-Path $output 'ClipType.Tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
 }

@@ -16,6 +16,9 @@ Windows 桌面小工具。在浏览器网页、聊天软件、编辑器里，可
 - 快捷键可选 Ctrl + Alt + V、Ctrl + Alt + P、Ctrl + Shift + F8；冲突时会提示。
 - 逐字间隔：0–500 ms，默认 30 ms。慢速输入框可调到 60–100 ms。
 - 开始前等待：300–5000 ms，留出松开按键的时间。
+- 节奏与暂停选项卡：可选 ±0–90% 随机间隔，标点/句尾/连续空行额外停顿（默认关闭）。空行在渲染为空格时仍参与节奏计算。
+- 暂停/继续默认 **Ctrl + Alt + Space**，可改为 **Ctrl + Shift + F9**。请保持原目标窗口；通过热键操作，避免点击设置窗改变焦点。恢复会重新验证窗口/原生控件，不自动回到已失效目标。
+- 任务状态和实时进度显示在主窗；普通粘贴是单次操作，不能在 Ctrl+V 内部暂停。暂停/停止快捷键被占用时会明确提示。
 - 换行：默认模拟 Shift + Enter，适合很多聊天输入框；编辑器可选 Enter，单行输入可选替换为空格。**聊天软件中 Enter 可能发送消息，先用短文本确认目标程序的行为。**
 - Tab 固定转换为 4 个空格，其他控制字符会移除；CRLF、CR、LF 和 Unicode 行分隔符统一处理。中文、英文、常用表情可直接模拟输入。
 - 单次最多 100,000 个 UTF-16 字符。模拟输入不包含复制文字的字体、图片或其他富文本格式；普通粘贴使用目标程序的 Ctrl + V 行为。
@@ -34,5 +37,7 @@ Windows 桌面小工具。在浏览器网页、聊天软件、编辑器里，可
 在项目目录执行 `powershell -ExecutionPolicy Bypass -File .\build.ps1 -Test`，生成程序并运行测试。只使用 Windows 自带的 .NET Framework C# 编译器，不需要下载 NuGet 包。
 
 `dist\ClipType.Tests.exe --integration` 会在独立测试窗口中验证真实按键输入（请在可交互桌面运行，测试期间不要切换窗口）。`dist\ClipType.Tests.exe --ui-smoke` 检查主窗口和选择窗口的构造及释放。`tests\browser-fixture.html` 是无网络请求的浏览器测试页，可手动打开检查 textarea、contenteditable 及 input/paste 事件。
+
+`dist\ClipType.Tests.exe --desktop` 验证跨进程热键/面板/暂停/粘贴/托盘，需要没有其他软件抢焦点的交互桌面。当前 vNext 的实际执行结果及环境干扰单独记录在 `docs/VNEXT_TEST_RESULTS.md`；不要把沙箱受限或目标切换后的正确取消当作已通过完整场景。
 
 源码在 `src`；`Native.cs` 封装 Win32，`Core.cs` 处理输入计划、设置和取消，`MainForm.cs` 管理托盘及快捷键，`ChoiceForm.cs` 提供选择面板。

@@ -1,0 +1,11 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>ClipType 内部节奏测试</title>
+<link rel="stylesheet" href="popup.css"><script src="core.js" defer></script><script src="test.js" defer></script>
+<body style="width:min(760px,100%);margin:30px auto">
+<h1>内部节奏测试</h1><p>仅演示字符切分、节奏与暂停状态；不代表目标网页兼容性。文字不会保存。</p>
+<label for="source">示例文字</label><textarea id="source">中文 English 👩‍💻，测试句尾停顿。
+
+下一段。</textarea>
+<label for="base">间隔 ms <input id="base" type="number" min="0" max="500" value="30"></label>
+<p><button id="run">开始测试</button> <button id="pause" disabled>暂停 / 继续</button> <button id="stop" disabled>停止</button></p>
+<label for="output">测试结果</label><textarea id="output" readonly></textarea><p id="progress" role="status">尚未开始</p>
+</body></html>

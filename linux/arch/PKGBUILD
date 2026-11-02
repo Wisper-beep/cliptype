@@ -1,0 +1,16 @@
+# Local prototype package. Copy alongside cliptype.pyz, README.md, LICENSE before makepkg.
+pkgname=cliptype-niri
+pkgver=1.1.0
+pkgrel=1
+pkgdesc='Clipboard typing prototype for Niri/Wayland'
+arch=('any')
+url='https://github.com/Wisper-beep/cliptype'
+license=('MIT')
+depends=('python' 'wtype' 'wl-clipboard' 'niri')
+source=('cliptype.pyz' 'README.md' 'LICENSE')
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+package() {
+    install -Dm755 "$srcdir/cliptype.pyz" "$pkgdir/usr/bin/cliptype"
+    install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "$srcdir/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

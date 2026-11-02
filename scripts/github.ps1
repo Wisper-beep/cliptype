@@ -2,10 +2,16 @@ param(
     [ValidateSet('Inspect', 'Create', 'Release', 'Status')][string]$Action = 'Inspect',
     [string]$Name = 'cliptype',
     [switch]$Private,
-    [string]$Tag = 'v1.0.0'
+    [string]$Tag = 'v1.1.0-rc.1',
+    [switch]$Prerelease,
+    [string]$TargetCommitish = 'vnext',
+    [string]$ExpectedHead = '',
+    [string]$NotesPath = ''
 )
 $ErrorActionPreference = 'Stop'
-if ($Name -notmatch '^[a-zA-Z0-9._-]+$' -or $Tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Invalid repository name or version.' }
+if ($Name -notmatch '^[a-zA-Z0-9._-]+$' -or $Tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$') { throw 'Invalid repository name or version.' }
+if ($Action -eq 'Release' -and $Tag.Contains('-') -and -not $Prerelease) { throw 'A preview tag requires -Prerelease.' }
+if ($ExpectedHead -and $ExpectedHead -notmatch '^[a-f0-9]{40}$') { throw 'ExpectedHead must be a full commit SHA.' }
 $env:GIT_TERMINAL_PROMPT = '0'
 $env:GCM_INTERACTIVE = 'Never'
 $credentialLines = "protocol=https`nhost=github.com`nusername=Wisper-beep`n`n" | git credential fill
@@ -41,13 +47,22 @@ if ($Action -eq 'Inspect') {
     Write-Output ('Created: ' + $repo.html_url)
     Write-Output ('Visibility: ' + $repo.visibility)
 } else {
-    $notes = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\RELEASE_NOTES.md') -Raw -Encoding UTF8
-    $release = Invoke-GitHub 'Post' ($repoPath + '/releases') @{tag_name = $Tag; name = 'ClipType ' + $Tag; body = $notes; draft = $false; prerelease = $false}
-    foreach ($assetName in @('ClipType-Windows.zip', 'ClipType-Extension.zip', 'SHA256SUMS.txt')) {
+    $assetNames = @('ClipType-Windows.zip','ClipType-Chromium.zip','ClipType-Firefox.zip','ClipType-Linux.tar.gz','cliptype.pyz','ClipType-Extension.zip','SHA256SUMS.txt')
+    foreach ($assetName in $assetNames) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot ('..\dist\' + $assetName)))) { throw ('Release asset missing: ' + $assetName) }
+    }
+    if ($ExpectedHead) {
+        $remoteCommit = Invoke-GitHub 'Get' ($repoPath + '/commits/' + [Uri]::EscapeDataString($TargetCommitish))
+        if ($remoteCommit.sha -ne $ExpectedHead) { throw 'Remote target changed; refusing to publish mismatched artifacts.' }
+    }
+    if (-not $NotesPath) { $NotesPath = Join-Path $PSScriptRoot '..\RELEASE_NOTES.md' }
+    $notes = Get-Content -LiteralPath $NotesPath -Raw -Encoding UTF8
+    $release = Invoke-GitHub 'Post' ($repoPath + '/releases') @{tag_name = $Tag; target_commitish = $TargetCommitish; name = 'ClipType ' + $Tag; body = $notes; draft = $false; prerelease = [bool]$Prerelease; make_latest = 'false'}
+    foreach ($assetName in $assetNames) {
         $assetPath = Join-Path $PSScriptRoot ('..\dist\' + $assetName)
         if (-not (Test-Path -LiteralPath $assetPath)) { throw ('Release asset missing: ' + $assetName) }
         $uri = ($release.upload_url -replace '\{.*$', '') + '?name=' + $assetName
-        $contentType = if ($assetName.EndsWith('.zip')) { 'application/zip' } else { 'text/plain' }
+        $contentType = if ($assetName.EndsWith('.zip')) { 'application/zip' } elseif ($assetName.EndsWith('.txt')) { 'text/plain' } else { 'application/octet-stream' }
         try { $asset = Invoke-RestMethod -Uri $uri -Headers $headers -Method Post -ContentType $contentType -InFile $assetPath }
         catch { throw ('GitHub release upload failed for ' + $assetName + '. Release: ' + $release.html_url) }
         Write-Output ('Uploaded: ' + $asset.browser_download_url)

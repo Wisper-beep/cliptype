@@ -1,6 +1,9 @@
 /dist/
 /node_modules/
 /.test-artifacts/
+/.research/
+__pycache__/
+*.pyc
 .env
 .env.*
 *.tmp

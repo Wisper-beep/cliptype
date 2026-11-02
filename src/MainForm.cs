@@ -9,7 +9,8 @@ namespace ClipType
 {
     internal sealed class MainForm : Form
     {
-        private const int HotkeyId = 41, EscapeId = 42;
+        private const int HotkeyId = 41, EscapeId = 42, PauseId = 43;
+        private static readonly string[] PauseNames = { "Ctrl + Alt + Space", "Ctrl + Shift + F9" };
         private static readonly string[] HotkeyNames = { "Ctrl + Alt + V", "Ctrl + Alt + P", "Ctrl + Shift + F8" };
         private static readonly uint[] HotkeyModifiers = { 3, 3, 6 };
         private static readonly uint[] HotkeyKeys = { 0x56, 0x50, 0x77 };
@@ -20,18 +21,26 @@ namespace ClipType
         private readonly NumericUpDown interval, delay;
         private readonly TextBox sandbox;
         private readonly Button stop;
+        private readonly CheckBox randomize;
+        private readonly NumericUpDown variation, punctuation, sentence, paragraph;
+        private readonly ComboBox pauseKeys;
+        private readonly ProgressBar progressBar;
+        private readonly Func<CancellationToken, Task<string>> readClipboard;
+        private InputSession session;
         private bool registered, busy, exiting, ready;
         private ChoiceForm chooser;
         private CancellationTokenSource cancellation;
 
-        internal MainForm()
+        internal MainForm(Func<CancellationToken, Task<string>> clipboardReader = null)
         {
+            readClipboard = clipboardReader ?? new Func<CancellationToken, Task<string>>(ReadClipboardAsync);
             SuspendLayout();
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
             settings = Settings.Load();
             Text = "ClipType · 剪贴板模拟输入";
-            ClientSize = new Size(740, 698);
+            ClientSize = new Size(740, 746);
+            AutoScroll = true;
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -53,8 +62,12 @@ namespace ClipType
             shortcut.ForeColor = Theme.Accent; hero.Controls.Add(shortcut);
             hero.Controls.Add(Theme.Label("选择「模拟输入」或「普通粘贴」，文字会回到原来的位置。", 22, 108, 640, 24, 9.5f));
 
-            var options = Theme.Card(28, 278, 684, 207);
-            Controls.Add(options);
+            var tabs = new TabControl { Location = new Point(28, 278), Size = new Size(684, 245) };
+            var basic = new TabPage("基础设置");
+            var rhythm = new TabPage("节奏与暂停") { BackColor = Color.White };
+            tabs.TabPages.Add(basic); tabs.TabPages.Add(rhythm); Controls.Add(tabs);
+            var options = Theme.Card(0, 0, 674, 207);
+            basic.Controls.Add(options);
             options.Controls.Add(Theme.Label("输入设置", 20, 15, 620, 27, 12, true));
             options.Controls.Add(Theme.Label("全局快捷键", 22, 59, 117, 25, 10));
             hotkeys = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList,
@@ -77,7 +90,22 @@ namespace ClipType
             var hint = Theme.Label("Tab 转为 4 个空格", 441, 157, 221, 26, 9);
             hint.ForeColor = Theme.Muted; options.Controls.Add(hint);
 
-            var test = Theme.Card(28, 499, 684, 119);
+            randomize = new CheckBox { Text = "随机间隔", Checked = settings.Randomize, Location = new Point(20, 20), Size = new Size(125, 28) };
+            variation = Number(settings.VariationPercent, 0, 90, 150, 18, 75, 5);
+            rhythm.Controls.Add(randomize); rhythm.Controls.Add(variation);
+            rhythm.Controls.Add(Theme.Label("± %（关闭时使用固定间隔）", 237, 23, 395, 25, 9));
+            rhythm.Controls.Add(Theme.Label("标点停顿 ms", 20, 69, 120, 26, 9));
+            punctuation = Number(settings.PunctuationPauseMs, 0, 5000, 150, 62, 100, 50); rhythm.Controls.Add(punctuation);
+            rhythm.Controls.Add(Theme.Label("句尾停顿 ms", 340, 69, 125, 26, 9));
+            sentence = Number(settings.SentencePauseMs, 0, 5000, 474, 62, 120, 50); rhythm.Controls.Add(sentence);
+            rhythm.Controls.Add(Theme.Label("空行停顿 ms", 20, 114, 125, 26, 9));
+            paragraph = Number(settings.ParagraphPauseMs, 0, 10000, 150, 107, 100, 100); rhythm.Controls.Add(paragraph);
+            rhythm.Controls.Add(Theme.Label("暂停 / 继续", 20, 159, 125, 26, 9));
+            pauseKeys = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(150, 153), Size = new Size(255, 30) };
+            pauseKeys.Items.AddRange(PauseNames); pauseKeys.SelectedIndex = settings.PauseHotkeyIndex; rhythm.Controls.Add(pauseKeys);
+            rhythm.Controls.Add(Theme.Label("保持目标窗口；Esc 停止", 423, 159, 235, 26, 8.5f));
+
+            var test = Theme.Card(28, 537, 684, 119);
             Controls.Add(test);
             test.Controls.Add(Theme.Label("本地试输入", 20, 14, 160, 26, 11, true));
             var testHint = Theme.Label("复制一段文字，点击下方后按快捷键试试。", 190, 17, 474, 24, 9);
@@ -87,12 +115,14 @@ namespace ClipType
                 Font = Theme.Font(10), BorderStyle = BorderStyle.FixedSingle, AccessibleName = "本地试输入文本框" };
             test.Controls.Add(sandbox);
 
-            status = Theme.Label("正在注册快捷键…", 30, 636, 466, 42, 9);
+            progressBar = new ProgressBar { Location = new Point(30, 666), Size = new Size(454, 8), Maximum = 100 };
+            Controls.Add(progressBar);
+            status = Theme.Label("正在注册快捷键…", 30, 683, 466, 53, 9);
             status.ForeColor = Theme.Muted; Controls.Add(status);
-            stop = Theme.Button("停止  Esc", 500, 632, 108, 37, false);
+            stop = Theme.Button("停止  Esc", 500, 680, 108, 37, false);
             stop.Enabled = false; stop.Click += delegate { CancelInput(); };
             Controls.Add(stop);
-            var hide = Theme.Button("收起", 620, 632, 92, 37, true);
+            var hide = Theme.Button("收起", 620, 680, 92, 37, true);
             hide.Click += delegate { Hide(); };
             Controls.Add(hide);
 
@@ -113,6 +143,12 @@ namespace ClipType
             newlines.SelectedIndexChanged += delegate { SaveOptions(); };
             interval.ValueChanged += delegate { SaveOptions(); };
             delay.ValueChanged += delegate { SaveOptions(); };
+            randomize.CheckedChanged += delegate { SaveOptions(); };
+            variation.ValueChanged += delegate { SaveOptions(); };
+            punctuation.ValueChanged += delegate { SaveOptions(); };
+            sentence.ValueChanged += delegate { SaveOptions(); };
+            paragraph.ValueChanged += delegate { SaveOptions(); };
+            pauseKeys.SelectedIndexChanged += delegate { SaveOptions(); };
             ResumeLayout(true);
         }
 
@@ -144,6 +180,12 @@ namespace ClipType
             settings.IntervalMs = (int)interval.Value;
             settings.StartDelayMs = (int)delay.Value;
             settings.Newlines = (NewlineMode)newlines.SelectedIndex;
+            settings.Randomize = randomize.Checked;
+            settings.VariationPercent = (int)variation.Value;
+            settings.PunctuationPauseMs = (int)punctuation.Value;
+            settings.SentencePauseMs = (int)sentence.Value;
+            settings.ParagraphPauseMs = (int)paragraph.Value;
+            settings.PauseHotkeyIndex = pauseKeys.SelectedIndex;
             shortcut.Text = HotkeyNames[settings.HotkeyIndex]; UpdateSpeed();
             try { settings.Save(); SetStatus("设置已保存 · " + HotkeyNames[settings.HotkeyIndex] + " 呼出选择面板", false); }
             catch (Exception ex) { SetStatus("本次设置已生效，但保存失败：" + ex.Message, true); }
@@ -161,6 +203,7 @@ namespace ClipType
         }
         private void Notify(string message, bool error)
         {
+            if (IsDisposed || exiting) return;
             SetStatus(message, error);
             if (error)
             {
@@ -176,6 +219,7 @@ namespace ClipType
             if (m.Msg == Native.WM_HOTKEY)
             {
                 if (m.WParam.ToInt32() == EscapeId) { CancelInput(); return; }
+                if (m.WParam.ToInt32() == PauseId) { TogglePause(); return; }
                 if (m.WParam.ToInt32() == HotkeyId)
                 {
                     if (!busy) BeginPaste();
@@ -185,13 +229,14 @@ namespace ClipType
             base.WndProc(ref m);
         }
 
-        private async Task<string> ReadClipboardAsync()
+        private async Task<string> ReadClipboardAsync(CancellationToken token)
         {
             for (int attempt = 0; attempt < 5; attempt++)
             {
+                token.ThrowIfCancellationRequested();
                 try { return Clipboard.ContainsText(TextDataFormat.UnicodeText) ? Clipboard.GetText(TextDataFormat.UnicodeText) : ""; }
                 catch (ExternalException) { if (attempt == 4) throw; }
-                await Task.Delay(60);
+                await Task.Delay(60, token);
             }
             return "";
         }
@@ -200,7 +245,9 @@ namespace ClipType
         {
             IntPtr target = Native.GetForegroundWindow();
             IntPtr focus = Native.FocusWindow(target);
-            if (target == IntPtr.Zero || (target == Handle && !sandbox.Focused))
+            uint targetProcess;
+            uint targetThread = Native.GetWindowThreadProcessId(target, out targetProcess);
+            if (target == IntPtr.Zero || focus == IntPtr.Zero || (target == Handle && !sandbox.Focused))
             {
                 Notify("请先点击目标输入框，或下方的本地试输入框，再按快捷键。", true);
                 return;
@@ -208,7 +255,10 @@ namespace ClipType
             busy = true;
             try
             {
-                string text = await ReadClipboardAsync();
+                cancellation = new CancellationTokenSource();
+                CancellationToken token = cancellation.Token;
+                string text = await readClipboard(token);
+                token.ThrowIfCancellationRequested();
                 if (text.Length == 0) { Notify("剪贴板里没有文字。请先复制文字。", true); return; }
                 if (text.Length > InputPlan.MaxLength) { Notify("单次最多输入 100,000 个字符，请分段复制。", true); return; }
                 // Clipboard retries must not capture a newly selected window by accident.
@@ -220,43 +270,72 @@ namespace ClipType
                     simulate = chooser.Simulate;
                     if (result != DialogResult.OK)
                     {
-                        Native.SetForegroundWindow(target);
+                        if (!exiting) Native.SetForegroundWindow(target);
                         SetStatus("已取消 · 未输入文字", false);
                         return;
                     }
                 }
                 chooser = null;
-                if (!simulate && await ReadClipboardAsync() != text)
+                token.ThrowIfCancellationRequested();
+                if (!simulate && await readClipboard(token) != text)
                     throw new InvalidOperationException("剪贴板内容已改变，请重新按快捷键选择。");
+                token.ThrowIfCancellationRequested();
                 var steps = simulate ? InputPlan.Build(text, settings.Newlines)
                     : new System.Collections.Generic.List<InputStep> { new InputStep(Native.Chord(0x11, 0x56)) };
                 if (steps.Count == 0) throw new InvalidOperationException("这段内容没有可输入的文字。");
-                if (!Native.IsWindow(target) || !Native.SetForegroundWindow(target))
+                uint currentProcess;
+                if (!Native.IsWindow(target) || Native.GetWindowThreadProcessId(target, out currentProcess) != targetThread || currentProcess != targetProcess)
                     throw new InvalidOperationException("无法返回目标窗口。请重新点击输入框后再试。");
-                cancellation = new CancellationTokenSource();
-                Native.RegisterHotKey(Handle, EscapeId, 0x4000, 0x1B);
+                if (!Native.RegisterHotKey(Handle, EscapeId, 0x4000, 0x1B))
+                    throw new InvalidOperationException("Esc 停止快捷键注册失败，请关闭占用它的程序后重试。");
+                if (simulate && !Native.RegisterHotKey(Handle, PauseId, (settings.PauseHotkeyIndex == 0 ? 3u : 6u) | 0x4000, settings.PauseHotkeyIndex == 0 ? 0x20u : 0x78u))
+                    throw new InvalidOperationException("暂停快捷键被占用，请在节奏设置中更换组合。");
                 stop.Enabled = true;
                 SetOptionsEnabled(false);
                 SetStatus("准备输入… 松开快捷键；按 Esc 可停止。", false);
                 int total = steps.Count;
-                await new InputEngine().RunAsync(target, focus, steps, simulate ? settings.IntervalMs : 0,
-                    settings.StartDelayMs, cancellation.Token,
-                    delegate(int count) { SetStatus("正在输入 " + count + " / " + total + " · Esc 停止", false); });
+                session = new InputSession(total); progressBar.Value = 0;
+                // Disabling the main form's selected control can activate another control.
+                // Restore the target only after every UI state change has finished.
+                if (!Native.SetForegroundWindow(target))
+                    throw new InvalidOperationException("无法返回目标窗口，请重新点击输入框后再试。");
+                await new InputEngine().RunAsync(target, focus, steps, settings, session, cancellation.Token,
+                    delegate(int count)
+                    {
+                        int percent = count * 100 / total; progressBar.Value = percent;
+                        tray.Text = "ClipType · " + percent + "%";
+                        SetStatus("输入 " + count + " / " + total + " · " + PauseNames[settings.PauseHotkeyIndex] + " 暂停", false);
+                    });
                 SetStatus(simulate ? "模拟输入完成 · " + total + " 个输入单元" : "已向目标窗口发送 Ctrl + V", false);
             }
             catch (OperationCanceledException ex) { SetStatus(ex.Message.StartsWith("A task") || cancellation != null && cancellation.IsCancellationRequested ? "输入已停止 · 已输入的文字会保留" : ex.Message, false); }
             catch (Exception ex) { Notify(ex.Message, true); }
             finally
             {
-                if (IsHandleCreated) Native.UnregisterHotKey(Handle, EscapeId);
+                if (IsHandleCreated) { Native.UnregisterHotKey(Handle, EscapeId); Native.UnregisterHotKey(Handle, PauseId); }
                 if (cancellation != null) { cancellation.Dispose(); cancellation = null; }
                 if (!IsDisposed) { stop.Enabled = false; SetOptionsEnabled(true); }
-                chooser = null; busy = false;
+                session = null; chooser = null; busy = false;
+                if (!IsDisposed) tray.Text = "ClipType · 剪贴板模拟输入";
+                if (exiting && !IsDisposed) Close();
             }
         }
 
         private void SetOptionsEnabled(bool value)
-        { hotkeys.Enabled = value; interval.Enabled = value; delay.Enabled = value; newlines.Enabled = value; }
+        {
+            hotkeys.Enabled = value; interval.Enabled = value; delay.Enabled = value; newlines.Enabled = value;
+            randomize.Enabled = value; variation.Enabled = value; punctuation.Enabled = value;
+            sentence.Enabled = value; paragraph.Enabled = value; pauseKeys.Enabled = value;
+        }
+        private void TogglePause()
+        {
+            if (session == null) return;
+            if (session.State == InputState.Paused)
+            {
+                session.Resume(); SetStatus("恢复前校验目标… Esc 停止", false);
+            }
+            else if (session.Pause()) SetStatus("已暂停 " + session.Completed + " / " + session.Total + " · " + PauseNames[settings.PauseHotkeyIndex] + " 继续", false);
+        }
         private void CancelInput() { if (cancellation != null) cancellation.Cancel(); }
         private void ShowSettings()
         {
@@ -265,9 +344,10 @@ namespace ClipType
         }
         private void ExitApp()
         {
+            exiting = true;
             CancelInput();
-            if (chooser != null && !chooser.IsDisposed) chooser.Close();
-            exiting = true; Close();
+            if (chooser != null && !chooser.IsDisposed) chooser.DialogResult = DialogResult.Cancel;
+            if (!busy) Close();
         }
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
@@ -279,7 +359,7 @@ namespace ClipType
             if (disposing && !IsDisposed)
             {
                 CancelInput();
-                if (IsHandleCreated) { Native.UnregisterHotKey(Handle, HotkeyId); Native.UnregisterHotKey(Handle, EscapeId); }
+                if (IsHandleCreated) { Native.UnregisterHotKey(Handle, HotkeyId); Native.UnregisterHotKey(Handle, EscapeId); Native.UnregisterHotKey(Handle, PauseId); }
                 tray.Visible = false; tray.Dispose();
                 if (Icon != null) Icon.Dispose();
             }

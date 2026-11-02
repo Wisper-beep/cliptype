@@ -7,3 +7,7 @@
 *.yml text eol=lf
 *.md text eol=lf
 *.png binary
+*.py text eol=lf
+*.mjs text eol=lf
+*.kdl text eol=lf
+*.svg text eol=lf

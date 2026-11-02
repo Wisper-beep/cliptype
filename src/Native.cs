@@ -54,7 +54,7 @@ namespace ClipType
         [DllImport("user32.dll")]
         internal static extern short GetAsyncKeyState(int key);
         [DllImport("user32.dll")]
-        private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint process);
+        internal static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint process);
         [DllImport("user32.dll")]
         private static extern bool GetGUIThreadInfo(uint thread, ref GUITHREADINFO info);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]

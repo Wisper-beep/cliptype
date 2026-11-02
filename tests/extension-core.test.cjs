@@ -13,10 +13,10 @@ test('graphemes keep combining accents, emoji families and flags together', () =
   assert.deepEqual(core.graphemes('中e\u0301👩‍💻🇨🇳'), ['中', 'e\u0301', '👩‍💻', '🇨🇳']);
 });
 test('settings validate untrusted messages and saved preferences', () => {
-  assert.deepEqual(core.settings(), {interval: 30, delay: 500, newlines: 'preserve'});
+  assert.deepEqual(core.settings(), core.DEFAULTS);
   assert.deepEqual(core.settings(null), core.DEFAULTS);
-  assert.deepEqual(core.settings({interval: -5, delay: 99999, newlines: 'send'}), {interval: 0, delay: 5000, newlines: 'preserve'});
-  assert.deepEqual(core.settings({interval: 'bad', delay: Infinity, newlines: 'space'}), {interval: 30, delay: 500, newlines: 'space'});
+  assert.deepEqual(core.settings({interval: -5, delay: 99999, newlines: 'send'}), {...core.DEFAULTS, interval: 0, delay: 5000});
+  assert.deepEqual(core.settings({interval: 'bad', delay: Infinity, newlines: 'space'}), {...core.DEFAULTS, newlines: 'space'});
 });
 test('production manifest only requests declared functionality', () => {
   const manifest = require('../extension/manifest.json');
@@ -29,9 +29,24 @@ test('production manifest only requests declared functionality', () => {
     assert.ok(fs.existsSync(path.join(__dirname, '../extension', file)), file);
 });
 test('all extension JavaScript parses without dynamic code generation', () => {
-  for (const file of ['background.js', 'core.js', 'content.js', 'popup.js']) {
+  for (const file of ['background.js', 'core.js', 'content.js', 'popup.js', 'test.js']) {
     const source = fs.readFileSync(path.join(__dirname, '../extension', file), 'utf8');
     new vm.Script(source, {filename: file});
     assert.doesNotMatch(source, /\beval\s*\(|new Function\s*\(/);
   }
+});
+test('rhythm is bounded and supports CJK punctuation, sentences and blank lines', () => {
+  const options = {...core.DEFAULTS, interval:100, randomize:true, variation:20, punctuation:200, sentence:400, paragraph:800};
+  assert.equal(core.delayAfter('字', '字', options, 0), 80);
+  assert.equal(core.delayAfter('字', '字', options, 1), 120);
+  assert.equal(core.delayAfter('，', '字', options, .5), 300);
+  assert.equal(core.delayAfter('。', '字', options, .5), 500);
+  assert.equal(core.delayAfter('\n', '\n', options, .5), 900);
+});
+test('session only pauses active tasks and cannot resume a completed task', () => {
+  const session = new core.Session(4);
+  assert.equal(session.resume(), false); session.begin();
+  assert.ok(session.pause()); assert.equal(session.state, 'paused'); assert.ok(session.resume());
+  assert.equal(session.state, 'countdown'); session.running(); assert.ok(session.pause()); assert.ok(session.resume());
+  assert.equal(session.state, 'running'); session.finish('completed'); assert.equal(session.pause(), false); assert.equal(session.resume(), false);
 });

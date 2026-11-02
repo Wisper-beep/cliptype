@@ -3,6 +3,8 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Linq;
+using System.Reflection;
 using ClipType;
 
 internal static class Tests
@@ -21,6 +23,14 @@ internal static class Tests
             Check(Marshal.SizeOf(typeof(Native.INPUT)) == (IntPtr.Size == 8 ? 40 : 28), "Win32 INPUT ABI layout");
             Check(InputPlan.Normalize("A\r\nB\rC\nD\u2028E\u2029F\tG\0\b") == "A\nB\nC\nD\nE\nF    G", "Normalize newlines, tabs and control characters");
             Check(InputPlan.Normalize("中文🙂 e\u0301") == "中文🙂 e\u0301", "Preserve Unicode and combining characters");
+            Check(InputPlan.Build("👩‍💻🇨🇳👍🏽", NewlineMode.Enter).Count == 3, "Group ZWJ emoji, flags and skin tone modifiers");
+            var rhythmSettings = new Settings { IntervalMs=100, Randomize=true, VariationPercent=20, PunctuationPauseMs=200, SentencePauseMs=400, ParagraphPauseMs=800 };
+            Check(Rhythm.DelayAfter("字","字",rhythmSettings,0)==80 && Rhythm.DelayAfter("字","字",rhythmSettings,1)==120, "Random rhythm stays in configured bounds");
+            Check(Rhythm.DelayAfter("，","字",rhythmSettings,.5)==300 && Rhythm.DelayAfter("。","字",rhythmSettings,.5)==500 && Rhythm.DelayAfter("\n","\n",rhythmSettings,.5)==900, "Semantic pauses support Chinese punctuation and blank lines");
+            var state = new InputSession(5); Check(!state.Resume(), "Idle task cannot resume"); state.Begin(); state.Pause();
+            Check(state.State==InputState.Paused && state.Resume() && state.State==InputState.Countdown, "Pause and resume countdown");
+            state.Running(); state.Pause(); state.Resume(); state.Finish(InputState.Completed);
+            Check(state.State==InputState.Completed && !state.Resume() && !state.Pause(), "Terminal task cannot restart");
             var unicode = InputPlan.Build("中🙂e\u0301", NewlineMode.ShiftEnter);
             Check(unicode.Count == 3, "Do not split surrogate pairs or combining text elements");
             Check(unicode[1].Keys.Length == 4 && unicode[1].Keys[0].data.keyboard.scan == '\uD83D' && unicode[1].Keys[2].data.keyboard.scan == '\uDE42', "Emoji sends complete UTF-16 pair");
@@ -49,6 +59,7 @@ internal static class Tests
             Check(invalidTarget, "Missing target prevents injection");
             if (args.Length > 0 && args[0] == "--integration") Integration();
             if (args.Length > 0 && args[0] == "--ui-smoke") UiSmoke();
+            if (args.Length > 0 && args[0] == "--desktop") Desktop();
             Console.WriteLine("All " + passed + " checks passed.");
             return 0;
         }
@@ -106,6 +117,22 @@ internal static class Tests
                     await Task.Delay(100);
                     Check(box.Text == "ab中文ef", "Typing replaces selected text at original caret");
                     box.Clear();
+                    var pausedSession = new InputSession(12);
+                    using (var timer = new System.Windows.Forms.Timer { Interval=180 })
+                    {
+                        int pausedLength = -1;
+                        bool held = false;
+                        timer.Tick += delegate {
+                            if (pausedLength < 0) { pausedLength = box.Text.Length; return; }
+                            timer.Stop(); held = box.Text.Length == pausedLength && pausedSession.State == InputState.Paused; pausedSession.Resume();
+                        };
+                        await engine.RunAsync(form.Handle, focus, InputPlan.Build("暂停🙂恢复继续abcde",NewlineMode.Enter), new Settings {IntervalMs=10,StartDelayMs=300}, pausedSession, CancellationToken.None,
+                            delegate(int count) { if(count==3) { pausedSession.Pause(); timer.Start(); } });
+                        await Task.Delay(100);
+                        Check(box.Text=="暂停🙂恢复继续abcde" && pausedSession.State==InputState.Completed, "Resume preserves original target and exact Unicode text");
+                        Check(held, "Pause sends no extra characters after queued events drain");
+                    }
+                    box.Clear();
                     using (var cancel = new CancellationTokenSource())
                     {
                         bool cancelled = false;
@@ -113,6 +140,21 @@ internal static class Tests
                         catch (OperationCanceledException) { cancelled = true; }
                         await Task.Delay(100);
                         Check(cancelled && box.Text.Length > 0 && box.Text.Length < 80, "Cancellation stops a real partial input");
+                    }
+                    box.Clear();
+                    using (var releaseModifier = new System.Windows.Forms.Timer { Interval = 100 })
+                    {
+                        bool stopped = false;
+                        releaseModifier.Tick += delegate { releaseModifier.Stop(); Native.Send(new[] { Native.Key(0x11, 0, Native.KeyUp) }); };
+                        try
+                        {
+                            await engine.RunAsync(form.Handle, focus, InputPlan.Build("abcdefghij", NewlineMode.Enter), 10, 300, CancellationToken.None,
+                                delegate(int count) { if (count == 3) { Native.Send(new[] { Native.Key(0x11, 0, 0) }); releaseModifier.Start(); } });
+                        }
+                        catch (OperationCanceledException) { stopped = true; }
+                        finally { Native.Send(new[] { Native.Key(0x11, 0, Native.KeyUp) }); }
+                        await Task.Delay(100);
+                        Check(stopped && box.Text == "abc", "Unrecognized modifier cancels without sending during chord grace");
                     }
                     box.Clear();
                     await engine.RunAsync(form.Handle, focus, InputPlan.Build("一\n二", NewlineMode.ShiftEnter), 10, 300, CancellationToken.None, delegate { });
@@ -133,6 +175,9 @@ internal static class Tests
                         catch (OperationCanceledException) { stopped = true; }
                         Check(stopped && other.Text == "" && box.Text == "", "Focus change prevents typing into another control");
                     }
+                    box.Focus();
+                    await ExitDuringClipboardAwait(form.Handle, false, delegate { return box.Text; });
+                    await ExitDuringClipboardAwait(form.Handle, true, delegate { return box.Text; });
                 }
                 catch (Exception ex) { failure = ex; }
                 finally { form.Close(); }
@@ -145,5 +190,190 @@ internal static class Tests
         {
             if (savedClipboard != null) Clipboard.SetDataObject(savedClipboard, true);
         }
+    }
+
+    private static T Field<T>(object instance, string name)
+    { return (T)instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(instance); }
+    private static async Task Until(Func<bool> condition, string message)
+    {
+        for (int i=0;i<250;i++) { if(condition()) return; await Task.Delay(20); }
+        throw new Exception("Timeout: " + message);
+    }
+    private static async Task SetClipboardAsync(string text)
+    {
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                Clipboard.SetText(text);
+                await Task.Delay(80);
+                if (Clipboard.ContainsText(TextDataFormat.UnicodeText) && Clipboard.GetText(TextDataFormat.UnicodeText) == text) return;
+            }
+            catch (ExternalException) { }
+        }
+        throw new Exception("Test clipboard text did not become readable");
+    }
+    private static void Hotkey(uint modifiers, uint key)
+    {
+        var events = new System.Collections.Generic.List<Native.INPUT>();
+        if ((modifiers & 2)!=0) events.Add(Native.Key(0x11,0,0));
+        if ((modifiers & 1)!=0) events.Add(Native.Key(0x12,0,0));
+        if ((modifiers & 4)!=0) events.Add(Native.Key(0x10,0,0));
+        events.Add(Native.Key((ushort)key,0,0)); events.Add(Native.Key((ushort)key,0,2));
+        if ((modifiers & 4)!=0) events.Add(Native.Key(0x10,0,2));
+        if ((modifiers & 1)!=0) events.Add(Native.Key(0x12,0,2));
+        if ((modifiers & 2)!=0) events.Add(Native.Key(0x11,0,2));
+        Native.Send(events.ToArray());
+    }
+    private static async Task SlowHotkey(uint modifiers, uint key)
+    {
+        var held = new System.Collections.Generic.List<ushort>();
+        try
+        {
+            foreach (ushort modifier in new ushort[] { 0x11, 0x12, 0x10 })
+            {
+                uint flag = modifier == 0x11 ? 2u : modifier == 0x12 ? 1u : 4u;
+                if ((modifiers & flag) == 0) continue;
+                Native.Send(new[] { Native.Key(modifier, 0, 0) }); held.Add(modifier);
+                await Task.Delay(80);
+            }
+            Native.Send(Native.Chord(0, (ushort)key));
+            await Task.Delay(40);
+        }
+        finally
+        {
+            for (int i = held.Count - 1; i >= 0; i--)
+                Native.Send(new[] { Native.Key(held[i], 0, Native.KeyUp) });
+        }
+    }
+    private static async Task ExitDuringClipboardAwait(IntPtr target, bool ordinaryPasteRead, Func<string> targetText)
+    {
+        const string text = "EXIT MUST NOT TYPE";
+        var completion = new TaskCompletionSource<string>();
+        int reads = 0; CancellationToken readToken = CancellationToken.None;
+        using (var pending = new MainForm(delegate(CancellationToken token)
+        {
+            reads++; readToken = token;
+            return ordinaryPasteRead && reads == 1 ? Task.FromResult(text) : completion.Task;
+        }))
+        {
+            try
+            {
+                pending.Show(); Native.SetForegroundWindow(target);
+                await Until(() => Native.GetForegroundWindow() == target, "exit regression target activation");
+                string before = targetText();
+                pending.BeginInvoke(new Action(delegate {
+                    typeof(MainForm).GetMethod("BeginPaste", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(pending, null);
+                }));
+                if (ordinaryPasteRead)
+                {
+                    await Until(() => Field<ChoiceForm>(pending, "chooser") != null && Field<ChoiceForm>(pending, "chooser").Visible,
+                        "exit regression paste chooser");
+                    var choice = Field<ChoiceForm>(pending, "chooser");
+                    choice.Controls.OfType<Button>().First(b => b.Text == "普通粘贴").PerformClick();
+                }
+                await Until(() => reads == (ordinaryPasteRead ? 2 : 1) && Field<bool>(pending, "busy") && Field<ChoiceForm>(pending, "chooser") == null,
+                    "clipboard preflight is awaiting retry");
+                var tray = Field<NotifyIcon>(pending, "tray");
+                tray.ContextMenuStrip.Items[tray.ContextMenuStrip.Items.Count - 1].PerformClick();
+                Check(readToken.IsCancellationRequested, ordinaryPasteRead ? "Exit cancels ordinary-paste clipboard token" : "Exit cancels initial clipboard token");
+                // Even a reader that completes after cancellation must not restart preflight.
+                completion.TrySetResult(text);
+                await Until(() => pending.IsDisposed || Field<ChoiceForm>(pending, "chooser") != null,
+                    "exit during clipboard retry finishes");
+                Check(pending.IsDisposed, ordinaryPasteRead ? "Exit cancels ordinary-paste clipboard retry" : "Exit cancels initial clipboard retry before chooser");
+                await Task.Delay(80);
+                Check(targetText() == before, ordinaryPasteRead ? "Exit during paste preflight sends no keys" : "Exit during initial preflight sends no keys");
+            }
+            finally
+            {
+                completion.TrySetCanceled();
+                var choice = Field<ChoiceForm>(pending, "chooser");
+                if (choice != null && !choice.IsDisposed) choice.DialogResult = DialogResult.Cancel;
+            }
+        }
+    }
+    private static void Desktop()
+    {
+        Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+        Exception failure=null; var clipboard=Clipboard.GetDataObject();
+        using (var main=new MainForm())
+        {
+            System.Diagnostics.Process fixture = null;
+            main.Shown += async delegate
+            {
+                try
+                {
+                    // Run after the main window's initial activation has completed.
+                    await Task.Delay(500); main.Activate(); await Task.Delay(100);
+                    Check(Field<bool>(main,"registered"),"Main global hotkey registered (no conflicting instance)");
+                    var options=Field<Settings>(main,"settings"); options.IntervalMs=20;options.StartDelayMs=300;
+                    var keys=new uint[]{0x56,0x50,0x77};var modifiers=new uint[]{3,3,6};
+                    fixture = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                        System.IO.Path.Combine(System.IO.Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "ClipType.Target.exe"))
+                        { UseShellExecute=false, CreateNoWindow=true, WorkingDirectory=Environment.CurrentDirectory });
+                    await Until(delegate { fixture.Refresh(); return fixture.MainWindowHandle!=IntPtr.Zero; },"external fixture starts");
+                    await Until(delegate { fixture.Refresh(); Native.SetForegroundWindow(fixture.MainWindowHandle); return Native.GetForegroundWindow()==fixture.MainWindowHandle && Native.FocusWindow(fixture.MainWindowHandle)!=IntPtr.Zero; },"fixture activation");
+                    await Task.Delay(150);
+                    Check(Native.GetForegroundWindow()==fixture.MainWindowHandle,"External fixture is the foreground target");
+                    string sample="中文🙂"+new string('x',35);
+                    await SetClipboardAsync(sample);
+                    Hotkey(modifiers[options.HotkeyIndex],keys[options.HotkeyIndex]);
+                    await Until(()=>Application.OpenForms.OfType<ChoiceForm>().Any(),"hotkey opens chooser");
+                    var chooser=Application.OpenForms.OfType<ChoiceForm>().Single();
+                    await Task.Delay(200);
+                    Check(chooser.Visible,"Actual global hotkey opens native choice panel");
+                    Native.Send(Native.Chord(0,0x0D));
+                    await Until(()=>FixtureText().Length>=3,"first characters");
+                    await SlowHotkey(options.PauseHotkeyIndex==0?3u:6u,options.PauseHotkeyIndex==0?0x20u:0x78u);
+                    await Until(()=>Field<InputSession>(main,"session")!=null && Field<InputSession>(main,"session").State==InputState.Paused,"pause hotkey");
+                    await Task.Delay(80);string held=FixtureText();await Task.Delay(150);
+                    Check(FixtureText()==held,"Global pause shortcut freezes native input");
+                    await SetClipboardAsync("clipboard changed after capture");
+                    await SlowHotkey(options.PauseHotkeyIndex==0?3u:6u,options.PauseHotkeyIndex==0?0x20u:0x78u);
+                    await Until(()=>!Field<bool>(main,"busy"),"resume completes");
+                    Check(FixtureText()==sample,"Global resume keeps snapshot text even after clipboard changes");
+                    Check(Field<ProgressBar>(main,"progressBar").Value==100,"Native progress reaches 100 percent");
+                    Hotkey(2,0x41);await SetClipboardAsync("普通粘贴🙂");
+                    Hotkey(modifiers[options.HotkeyIndex],keys[options.HotkeyIndex]);
+                    await Until(()=>Application.OpenForms.OfType<ChoiceForm>().Any(),"paste chooser");
+                    chooser=Application.OpenForms.OfType<ChoiceForm>().Single();await Task.Delay(150);
+                    chooser.Controls.OfType<Button>().First(b=>b.Text=="普通粘贴").Focus();Native.Send(Native.Chord(0,0x0D));
+                    await Until(()=>!Field<bool>(main,"busy"),"native paste finishes");await Task.Delay(100);
+                    Check(FixtureText()=="普通粘贴🙂","Native choice panel ordinary paste remains functional");
+                    Hotkey(2,0x41);await SetClipboardAsync(new string('q',80));
+                    Hotkey(modifiers[options.HotkeyIndex],keys[options.HotkeyIndex]);
+                    await Until(()=>Application.OpenForms.OfType<ChoiceForm>().Any(),"cancel chooser");
+                    await Task.Delay(150);Native.Send(Native.Chord(0,0x0D));
+                    await Until(()=>FixtureText().StartsWith("qqq"),"cancel prefix");
+                    Hotkey(0,0x1B);await Until(()=>!Field<bool>(main,"busy"),"Escape stops task");
+                    Check(FixtureText().Length<80,"Global Escape shortcut cancels native input");
+                    var tray=Field<NotifyIcon>(main,"tray");tray.ContextMenuStrip.Items[0].PerformClick();
+                    Check(main.Visible,"Tray settings action reopens main window");
+                    using(var bitmap=new System.Drawing.Bitmap(main.Width,main.Height))
+                    { main.DrawToBitmap(bitmap,new System.Drawing.Rectangle(0,0,main.Width,main.Height));System.IO.Directory.CreateDirectory(".test-artifacts");bitmap.Save(".test-artifacts/windows-vnext.png"); }
+                    main.Close();Check(!main.Visible && tray.Visible,"Closing main window preserves tray residency");
+                    tray.ContextMenuStrip.Items[tray.ContextMenuStrip.Items.Count-1].PerformClick();
+                }
+                catch(Exception ex) {
+                    uint pid;Native.GetWindowThreadProcessId(Native.GetForegroundWindow(),out pid);
+                    Console.Error.WriteLine("Desktop status: " + Field<Label>(main,"status").Text + "; foreground process=" + System.Diagnostics.Process.GetProcessById((int)pid).ProcessName);
+                    failure=ex;Application.ExitThread();
+                }
+                finally { if(fixture!=null) { if(!fixture.HasExited) { fixture.CloseMainWindow(); if(!fixture.WaitForExit(2000))fixture.Kill(); } fixture.Dispose(); } }
+            };
+            Application.Run(main);
+        }
+        if(clipboard!=null)Clipboard.SetDataObject(clipboard,true);
+        if(failure!=null)throw failure;
+    }
+    private static string FixtureText()
+    {
+        try
+        {
+            using(var file=new System.IO.FileStream(".test-artifacts/native-target.txt",System.IO.FileMode.Open,System.IO.FileAccess.Read,System.IO.FileShare.ReadWrite))
+            using(var reader=new System.IO.StreamReader(file)) return reader.ReadToEnd();
+        }
+        catch(System.IO.IOException) { return ""; }
     }
 }

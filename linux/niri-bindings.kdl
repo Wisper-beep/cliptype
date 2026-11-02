@@ -1,0 +1,8 @@
+// Merge these into the existing binds block. Set an absolute path to cliptype.pyz.
+// Do not enable allow-when-locked or pass-through for these commands.
+binds {
+    Mod+Shift+V repeat=false { spawn "/absolute/path/cliptype.pyz" "run" "--interval" "30" "--delay" "800"; }
+    Mod+Shift+P repeat=false { spawn "/absolute/path/cliptype.pyz" "pause"; }
+    Mod+Shift+R repeat=false { spawn "/absolute/path/cliptype.pyz" "resume"; }
+    Mod+Shift+Escape repeat=false { spawn "/absolute/path/cliptype.pyz" "stop"; }
+}

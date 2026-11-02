@@ -168,6 +168,7 @@ test('popup UI uses real extension messaging and only stores settings (clipboard
     if (location.protocol === 'chrome-extension:') {
       Object.defineProperty(navigator.clipboard, 'readText', {value:async () => '面板输入🙂'});
       chrome.tabs.query = async () => [{id:tabId}];
+      if (globalThis.browser) browser.tabs.query = chrome.tabs.query;
     }
   }, {tabId});
   const extensionId = new URL(worker.url()).host;
@@ -185,4 +186,103 @@ test('popup UI uses real extension messaging and only stores settings (clipboard
   assert.equal(await page.locator('#plain').inputValue(), '面板输入🙂');
   const storage = await worker.evaluate(() => chrome.storage.local.get(null));
   assert.deepEqual(Object.keys(storage), ['settings']);
+});
+test('pause freezes progress; resume continues exactly once at the same caret', async () => {
+  const capture = await prepare(); await start(capture, '中文🙂'.repeat(8), {interval:30});
+  await page.waitForFunction(() => document.querySelector('#plain').value.length >= 3);
+  await command({action:'pause'});
+  const before = await page.locator('#plain').inputValue();
+  await page.waitForTimeout(150); assert.equal(await page.locator('#plain').inputValue(), before);
+  assert.equal((await command({action:'status'})).state, 'paused');
+  await command({action:'resume'}); await finished();
+  assert.equal(await page.locator('#plain').inputValue(), '中文🙂'.repeat(8));
+});
+test('resume refuses a changed selection or content without stealing focus', async () => {
+  const capture = await prepare(); await start(capture, 'x'.repeat(50), {interval:40});
+  await page.waitForFunction(() => document.querySelector('#plain').value.length >= 2);
+  await command({action:'pause'});
+  await page.evaluate(() => { const el=document.querySelector('#plain');el.value='external';el.setSelectionRange(0,0); });
+  const resumed = await command({action:'resume'}); assert.equal(resumed.ok, false);
+  await finished(); assert.equal(await page.locator('#plain').inputValue(), 'external');
+});
+test('capture becoming stale before start does not reset the caret or write text', async () => {
+  const capture = await prepare('#plain', 'abcd', 1);
+  await page.evaluate(() => document.querySelector('#plain').setSelectionRange(3,3));
+  await start(capture, 'WRONG'); await finished();
+  assert.equal(await page.locator('#plain').inputValue(), 'abcd');
+  assert.equal(await page.evaluate(() => document.querySelector('#plain').selectionStart), 3);
+});
+test('cancel while paused terminates; paragraph pauses remain cancellable', async () => {
+  const capture = await prepare(); await start(capture, 'A\n\nB', {paragraph:5000});
+  await page.waitForFunction(() => document.querySelector('#plain').value.includes('\n'));
+  await command({action:'pause'}); await command({action:'stop'}); await finished();
+  assert.notEqual(await page.locator('#plain').inputValue(), 'A\n\nB');
+});
+test('cancelled keydown still gets keyup and a long zero-delay task stays interruptible', async () => {
+  let capture = await prepare();
+  await page.evaluate(() => {
+    window.ups=0;const el=document.querySelector('#plain');
+    el.addEventListener('keydown',e=>e.preventDefault(),{once:true});el.addEventListener('keyup',()=>window.ups++,{once:true});
+  });
+  await start(capture, 'z'); await finished(); assert.equal(await page.evaluate(() => ups),1);
+  capture = await prepare(); await start(capture, '长'.repeat(10000), {interval:0});
+  await page.waitForFunction(() => document.querySelector('#plain').value.length > 2);
+  await command({action:'stop'}); await finished(); assert.ok((await page.locator('#plain').inputValue()).length < 10000);
+});
+test('synchronous page input and keyup changes stop before the next character', async () => {
+  for (const change of ['selection', 'content', 'keyup']) {
+    const capture = await prepare();
+    await page.evaluate(change => {
+      const el = document.querySelector('#plain');
+      el.addEventListener(change === 'keyup' ? 'keyup' : 'input', () => {
+        if (change === 'content') el.value = 'external';
+        else el.setSelectionRange(0, 0);
+      }, {once:true});
+    }, change);
+    await start(capture, 'ABC', {interval:40}); await finished();
+    assert.equal(await page.locator('#plain').inputValue(), change === 'content' ? 'external' : 'A');
+    assert.equal(await page.evaluate(() => document.querySelector('#plain').selectionStart), change === 'content' ? 8 : 0);
+  }
+});
+test('synchronous rich-editor input changes do not become the next insertion position', async () => {
+  for (const change of ['selection', 'content', 'keyup']) {
+    await page.evaluate(change => {
+      const el = document.querySelector('#rich');
+      el.innerHTML = ''; el.focus();
+      const range = document.createRange(); range.selectNodeContents(el); range.collapse(false);
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      el.addEventListener(change === 'keyup' ? 'keyup' : 'input', () => {
+        if (change === 'content') el.textContent = 'external';
+        else { const range = document.createRange(); range.selectNodeContents(el); range.collapse(true); selection.removeAllRanges(); selection.addRange(range); }
+      }, {once:true});
+    }, change);
+    const capture = await command({action:'capture'}); assert.equal(capture.ok, true, capture.error);
+    await start(capture, 'ABC', {interval:40}); await finished();
+    assert.equal(await page.locator('#rich').innerText(), change === 'content' ? 'external' : 'A');
+  }
+});
+test('quick button hides when disabled, outside an editor, and throughout a job', async () => {
+  await prepare();
+  const quick = page.getByRole('button', {name:'打开 ClipType 输入面板'});
+  await command({action:'quick',enabled:true}); await quick.waitFor({state:'visible'});
+  await command({action:'quick',enabled:false}); await quick.waitFor({state:'hidden'});
+  await command({action:'quick',enabled:true}); await quick.waitFor({state:'visible'});
+  await page.evaluate(() => { document.body.tabIndex=-1; document.body.focus(); });
+  await quick.waitFor({state:'hidden'});
+  const capture = await prepare(); await quick.waitFor({state:'visible'});
+  await start(capture, 'ABC', {interval:40}); await quick.waitFor({state:'hidden'});
+  await finished(); await quick.waitFor({state:'visible'});
+  await command({action:'quick',enabled:false});
+});
+test('paragraph rhythm follows original blank lines when rendered as spaces', async () => {
+  for (const selector of ['#single', '#plain']) {
+    const capture = await prepare(selector);
+    await start(capture, 'A\n\nB', {interval:5, paragraph:500, newlines:selector === '#plain' ? 'space' : 'preserve'});
+    await page.waitForFunction(selector => document.querySelector(selector).value.length >= 2, selector);
+    await page.waitForTimeout(120);
+    assert.equal(await page.locator(selector).inputValue(), 'A ');
+    await finished(); assert.equal(await page.locator(selector).inputValue(), 'A  B');
+    assert.equal(await page.evaluate(() => counts.enter), 0);
+    assert.equal(await page.evaluate(() => counts.paste), 0);
+  }
 });
